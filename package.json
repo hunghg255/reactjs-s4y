@@ -21,7 +21,8 @@
     "lint": "tsdx lint",
     "prepare": "tsdx build",
     "size": "size-limit",
-    "analyze": "size-limit --why"
+    "analyze": "size-limit --why",
+    "release": "npm run build && changeset publish"
   },
   "peerDependencies": {
     "react": ">=16"
@@ -50,6 +51,7 @@
     }
   ],
   "devDependencies": {
+    "@changesets/cli": "^2.26.0",
     "@size-limit/preset-small-lib": "^8.1.2",
     "@types/react": "^18.0.27",
     "@types/react-dom": "^18.0.10",
