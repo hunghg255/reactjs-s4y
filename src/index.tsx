@@ -1,12 +1,42 @@
-import React, { PureComponent, CSSProperties } from 'react';
+import React, { CSSProperties, forwardRef, PureComponent } from 'react';
+
+interface StickyProps {
+  children: React.ReactNode | ((isSticky: boolean) => React.ReactNode);
+  offsetTop: number;
+  containerSelectorFocus: string;
+  zIndex: number;
+  stickyEnableRange: number[];
+  onChange: (isSticky: boolean) => void;
+  forwardedRef: any;
+}
+
+interface StickyState {
+  isEnableSticky: boolean;
+  targetHeight: number;
+  innerPosition: string;
+  containerMeasure: Partial<DOMRect>;
+  isLong: boolean;
+  innerTop: number;
+}
 
 function getWindow(el: Document) {
+  if (!el) {
+    return null;
+  }
+
   return el.nodeType === 9 && el.defaultView;
 }
 
 function offset(el: Element) {
+  if (!el) {
+    return {
+      top: 0,
+      left: 0,
+    };
+  }
+
   const doc = el?.ownerDocument;
-  const docElem = doc.documentElement;
+  const docElem = doc?.documentElement;
   const win: any = getWindow(doc);
   let box = { top: 0, left: 0 };
 
@@ -27,34 +57,22 @@ function offset(el: Element) {
   };
 }
 
-interface StickyProps {
-  children: React.ReactNode | ((isSticky: boolean) => React.ReactNode);
-  offsetTop: number;
-  containerSelectorFocus: string;
-  zIndex: number;
-  stickyEnableRange: number[];
-  onChange: (isSticky: boolean) => void;
-}
-
-interface StickyState {
-  isEnableSticky: boolean;
-  targetHeight: number;
-  innerPosition: string;
-  containerMeasure: Partial<DOMRect>;
-  isLong: boolean;
-  innerTop: number;
-}
-
 type StickyDefaultProps = Pick<
   StickyProps,
-  | 'offsetTop'
-  | 'containerSelectorFocus'
-  | 'zIndex'
-  | 'stickyEnableRange'
-  | 'onChange'
+  'offsetTop' | 'containerSelectorFocus' | 'zIndex' | 'stickyEnableRange' | 'onChange'
 >;
 
-class Sticky extends PureComponent<StickyProps, StickyState> {
+const OBJ = 'object';
+const FUNC = 'function';
+
+const classImperativeHandle = (forwardedRef: any, refObj: any) => {
+  if (forwardedRef) {
+    typeof forwardedRef === OBJ && (forwardedRef.current = refObj);
+    typeof forwardedRef === FUNC && forwardedRef(refObj);
+  }
+};
+
+class StickyClass extends PureComponent<StickyProps, StickyState> {
   private $container!: any;
   private $inner!: any;
   private prevScrollY!: number;
@@ -64,13 +82,13 @@ class Sticky extends PureComponent<StickyProps, StickyState> {
     offsetTop: 0,
     containerSelectorFocus: 'body',
     zIndex: 10,
-    stickyEnableRange: [0, Infinity],
+    stickyEnableRange: [0, Number.POSITIVE_INFINITY],
     onChange: () => {},
   };
 
   public state: StickyState = {
     isEnableSticky: false,
-    targetHeight: Infinity,
+    targetHeight: Number.POSITIVE_INFINITY,
     innerPosition: 'static',
     containerMeasure: {},
     isLong: false,
@@ -81,12 +99,32 @@ class Sticky extends PureComponent<StickyProps, StickyState> {
     window.addEventListener('scroll', this.handleWindowScroll);
     this.handleWindowResize();
     window.addEventListener('resize', this.handleWindowResize);
+
+    classImperativeHandle(this.props.forwardedRef, this);
   }
 
   public componentWillUnmount() {
     window.removeEventListener('scroll', this.handleWindowScroll);
     window.removeEventListener('resize', this.handleWindowResize);
   }
+
+  resetState = async () => {
+    window.removeEventListener('scroll', this.handleWindowScroll);
+    window.removeEventListener('resize', this.handleWindowResize);
+
+    await this.setState({
+      isEnableSticky: false,
+      targetHeight: Number.POSITIVE_INFINITY,
+      innerPosition: 'static',
+      containerMeasure: {},
+      isLong: false,
+      innerTop: 0,
+    });
+
+    window.addEventListener('scroll', this.handleWindowScroll);
+    this.handleWindowResize();
+    window.addEventListener('resize', this.handleWindowResize);
+  };
 
   private getContainerSelectorFocus = () => {
     const { containerSelectorFocus } = this.props;
@@ -112,7 +150,7 @@ class Sticky extends PureComponent<StickyProps, StickyState> {
       const containerMeasure = this.$container.getBoundingClientRect();
       const targetHeight = $containerSelectorFocus
         ? $containerSelectorFocus.clientHeight
-        : Infinity;
+        : Number.POSITIVE_INFINITY;
       await this.setState({
         containerMeasure: {
           top: containerMeasure.top,
@@ -141,17 +179,13 @@ class Sticky extends PureComponent<StickyProps, StickyState> {
     const { containerMeasure, isLong } = this.state;
     const targetHeight = $containerSelectorFocus
       ? $containerSelectorFocus.clientHeight
-      : Infinity;
+      : Number.POSITIVE_INFINITY;
     return (
       (containerMeasure as any)?.top -
         (containerMeasure as any)?.height +
-        (isLong
-          ? (containerMeasure as any)?.height - window.innerHeight + offsetTop
-          : 0) -
+        (isLong ? (containerMeasure as any)?.height - window.innerHeight + offsetTop : 0) -
         offsetTop <
-      targetHeight * -1 -
-        (this.getContainerSelectorFocusOffsetTop() -
-          this.getContainerOffsetTop())
+      targetHeight * -1 - (this.getContainerSelectorFocusOffsetTop() - this.getContainerOffsetTop())
     );
   };
 
@@ -187,10 +221,7 @@ class Sticky extends PureComponent<StickyProps, StickyState> {
   private getContainerSelectorFocusOffsetBottom = () => {
     const $containerSelectorFocus = this.getContainerSelectorFocus();
     return $containerSelectorFocus
-      ? Math.trunc(
-          offset($containerSelectorFocus).top +
-            $containerSelectorFocus.clientHeight
-        )
+      ? Math.trunc(offset($containerSelectorFocus).top + $containerSelectorFocus.clientHeight)
       : 0;
   };
 
@@ -215,8 +246,7 @@ class Sticky extends PureComponent<StickyProps, StickyState> {
         (containerMeasure as any).top <= innerTop &&
         (innerPosition === 'fixedBottom' ||
           (innerPosition === 'absoluteBottom' &&
-            scrollY + window.innerHeight <=
-              this.getContainerSelectorFocusOffsetBottom()))
+            scrollY + window.innerHeight <= this.getContainerSelectorFocusOffsetBottom()))
       ) {
         await this.setState({
           innerPosition: 'absoluteCenter',
@@ -263,9 +293,7 @@ class Sticky extends PureComponent<StickyProps, StickyState> {
     }
   };
 
-  private getShortPosition = (
-    containerMeasure: StickyState['containerMeasure']
-  ) => {
+  private getShortPosition = (containerMeasure: StickyState['containerMeasure']) => {
     const { offsetTop } = this.props;
     if ((containerMeasure as any).top <= offsetTop) {
       if (this.checkWrapBottom()) {
@@ -285,73 +313,76 @@ class Sticky extends PureComponent<StickyProps, StickyState> {
 
   private getInnerStyle = (): CSSProperties => {
     const { offsetTop, zIndex } = this.props;
-    const {
-      targetHeight,
-      innerPosition,
-      containerMeasure,
-      isLong,
-      innerTop,
-    } = this.state;
+    const { targetHeight, innerPosition, containerMeasure, isLong, innerTop } = this.state;
     const topForAbsoluteBottom =
       targetHeight -
       (containerMeasure as any).height +
-      (this.getContainerSelectorFocusOffsetTop() -
-        this.getContainerOffsetTop());
+      (this.getContainerSelectorFocusOffsetTop() - this.getContainerOffsetTop());
     if (isLong) {
       switch (innerPosition) {
-        case 'static':
+        case 'static': {
           return {};
-        case 'fixedTop':
+        }
+        case 'fixedTop': {
           return {
             position: 'fixed',
             top: offsetTop,
             width: containerMeasure.width,
             zIndex,
           };
-        case 'absoluteCenter':
+        }
+        case 'absoluteCenter': {
           return {
             position: 'absolute',
             top: innerTop,
             width: containerMeasure.width,
             zIndex,
           };
-        case 'absoluteBottom':
+        }
+        case 'absoluteBottom': {
           return {
             position: 'absolute',
             top: topForAbsoluteBottom,
             width: containerMeasure.width,
             zIndex,
           };
-        case 'fixedBottom':
+        }
+        case 'fixedBottom': {
           return {
             position: 'fixed',
             bottom: 0,
             width: containerMeasure.width,
             zIndex,
           };
-        default:
+        }
+        default: {
           return {};
+        }
       }
     }
     switch (innerPosition) {
-      case 'static':
+      case 'static': {
         return {};
-      case 'absoluteBottom':
+      }
+      case 'absoluteBottom': {
         return {
           position: 'absolute',
           top: topForAbsoluteBottom,
           width: containerMeasure.width,
           zIndex,
         };
-      case 'fixedTop':
+      }
+      case 'fixedTop': {
         return {
           position: 'fixed',
           top: offsetTop,
           width: containerMeasure.width,
           zIndex,
         };
-      default:
+      }
+      default: {
         return {};
+      }
     }
   };
 
@@ -406,5 +437,10 @@ class Sticky extends PureComponent<StickyProps, StickyState> {
     );
   }
 }
+
+const Sticky = forwardRef((props: Partial<StickyProps>, ref: any) => {
+  // @ts-ignore
+  return <StickyClass {...props} forwardedRef={ref} />;
+});
 
 export default Sticky;
