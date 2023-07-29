@@ -1,10 +1,14 @@
+/* eslint-disable indent */
+/* eslint-disable no-lonely-if */
 import { ComponentProps, useEffect, useState } from 'react';
 
 const getScrollParent = (node: HTMLElement) => {
   let parent: HTMLElement | null = node;
   while ((parent = parent.parentElement)) {
-    const overflowYVal = getComputedStyle(parent, null).getPropertyValue('overflow-y');
-    if (parent === document.body) return window;
+    const overflowYVal = getComputedStyle(parent, undefined).getPropertyValue('overflow-y');
+    if (parent === document.body) {
+      return window;
+    }
     if (overflowYVal === 'auto' || overflowYVal === 'scroll' || overflowYVal === 'overlay') {
       return parent;
     }
@@ -34,17 +38,22 @@ const offsetTill = (node: HTMLElement, target: HTMLElement) => {
 const getParentNode = (node: HTMLElement) => {
   let currentParent = node.parentElement;
   while (currentParent) {
-    const style = getComputedStyle(currentParent, null);
-    if (style.getPropertyValue('display') !== 'contents') break;
+    const style = getComputedStyle(currentParent, undefined);
+    if (style.getPropertyValue('display') !== 'contents') {
+      break;
+    }
     currentParent = currentParent.parentElement;
   }
   return currentParent || window;
 };
 
-let stickyProp: null | string = null;
+let stickyProp: null | string;
 if (typeof CSS !== 'undefined' && CSS.supports) {
-  if (CSS.supports('position', 'sticky')) stickyProp = 'sticky';
-  else if (CSS.supports('position', '-webkit-sticky')) stickyProp = '-webkit-sticky';
+  if (CSS.supports('position', 'sticky')) {
+    stickyProp = 'sticky';
+  } else if (CSS.supports('position', '-webkit-sticky')) {
+    stickyProp = '-webkit-sticky';
+  }
 }
 
 // Inspired by https://github.com/WICG/EventListenerOptions/blob/gh-pages/explainer.md#feature-detection
@@ -59,7 +68,7 @@ try {
   const emptyHandler = () => {};
   window.addEventListener('testPassive', emptyHandler, opts);
   window.removeEventListener('testPassive', emptyHandler, opts);
-} catch (e) {}
+} catch {}
 
 /*
 
@@ -133,9 +142,12 @@ const getDimensions = <T extends object>(opts: {
 };
 
 const getVerticalPadding = (node: HTMLElement) => {
-  const computedParentStyle = getComputedStyle(node, null);
-  const parentPaddingTop = parseInt(computedParentStyle.getPropertyValue('padding-top'), 10);
-  const parentPaddingBottom = parseInt(computedParentStyle.getPropertyValue('padding-bottom'), 10);
+  const computedParentStyle = getComputedStyle(node, undefined);
+  const parentPaddingTop = Number.parseInt(computedParentStyle.getPropertyValue('padding-top'), 10);
+  const parentPaddingBottom = Number.parseInt(
+    computedParentStyle.getPropertyValue('padding-bottom'),
+    10,
+  );
   return { top: parentPaddingTop, bottom: parentPaddingBottom };
 };
 
@@ -157,7 +169,9 @@ const setup = (node: HTMLElement, unsubs: UnsubList, opts: Required<StickyConfig
     if (!isScheduled) {
       requestAnimationFrame(() => {
         const nextMode = onLayout();
-        if (nextMode !== mode) changeMode(nextMode);
+        if (nextMode !== mode) {
+          changeMode(nextMode);
+        }
         isScheduled = false;
       });
     }
@@ -186,12 +200,10 @@ const setup = (node: HTMLElement, unsubs: UnsubList, opts: Required<StickyConfig
     const { height: nodeHeight } = nodeDims;
     if (nodeHeight + offsetTop + offsetBottom <= viewPortHeight) {
       return MODES.small;
+    } else if (isBoxTooLow(latestScrollY)) {
+      return MODES.stickyBottom;
     } else {
-      if (isBoxTooLow(latestScrollY)) {
-        return MODES.stickyBottom;
-      } else {
-        return MODES.relative;
-      }
+      return MODES.relative;
     }
   };
 
@@ -237,7 +249,9 @@ const setup = (node: HTMLElement, unsubs: UnsubList, opts: Required<StickyConfig
   const changeMode = (newMode: StickyMode) => {
     const prevMode = mode;
     mode = newMode;
-    if (prevMode === MODES.relative) relativeOffset = -1;
+    if (prevMode === MODES.relative) {
+      relativeOffset = -1;
+    }
     if (newMode === MODES.small) {
       node.style.position = stickyProp as string;
       if (bottom) {
@@ -290,10 +304,14 @@ const setup = (node: HTMLElement, unsubs: UnsubList, opts: Required<StickyConfig
   changeMode(mode);
 
   const onScroll = (scrollY: number) => {
-    if (scrollY === latestScrollY) return;
+    if (scrollY === latestScrollY) {
+      return;
+    }
     const scrollDelta = scrollY - latestScrollY;
     latestScrollY = scrollY;
-    if (mode === MODES.small) return;
+    if (mode === MODES.small) {
+      return;
+    }
 
     const { offsetTop: scrollPaneOffset, height: viewPortHeight } = scrollPaneDims;
     const { naturalTop, height: parentHeight } = parentDims;
@@ -313,8 +331,8 @@ const setup = (node: HTMLElement, unsubs: UnsubList, opts: Required<StickyConfig
             changeMode(MODES.stickyBottom);
           }
         }
-      } else if (mode === MODES.relative) {
-        if (isBoxTooLow(scrollY)) changeMode(MODES.stickyBottom);
+      } else if (mode === MODES.relative && isBoxTooLow(scrollY)) {
+        changeMode(MODES.stickyBottom);
       }
     } else {
       // scroll up
@@ -336,10 +354,11 @@ const setup = (node: HTMLElement, unsubs: UnsubList, opts: Required<StickyConfig
             changeMode(MODES.stickyTop);
           }
         }
-      } else if (mode === MODES.relative) {
-        if (scrollPaneOffset + scrollY + offsetTop < naturalTop + relativeOffset) {
-          changeMode(MODES.stickyTop);
-        }
+      } else if (
+        mode === MODES.relative &&
+        scrollPaneOffset + scrollY + offsetTop < naturalTop + relativeOffset
+      ) {
+        changeMode(MODES.stickyTop);
       }
     }
   };
@@ -370,13 +389,17 @@ export const useSticky = ({
   offsetBottom = 0,
   bottom = false,
 }: StickyConfig = {}) => {
-  const [node, setNode] = useState<HTMLElement | null>(null);
+  const [node, setNode] = useState<HTMLElement | null>();
   useEffect(() => {
-    if (!node || !stickyProp) return;
+    if (!node || !stickyProp) {
+      return;
+    }
     const unsubs: UnsubList = [];
     setup(node, unsubs, { offsetBottom, offsetTop, bottom });
     return () => {
-      unsubs.forEach((fn) => fn());
+      for (const fn of unsubs) {
+        fn();
+      }
     };
   }, [node, offsetBottom, offsetTop, bottom]);
 

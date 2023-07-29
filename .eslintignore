@@ -18,3 +18,4 @@ vite.config.ts
 dist
 
 rollup.config.js
+src/index.d.ts
