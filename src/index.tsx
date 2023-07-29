@@ -1,446 +1,400 @@
-import React, { CSSProperties, forwardRef, PureComponent } from 'react';
+import { ComponentProps, useEffect, useState } from 'react';
 
-interface StickyProps {
-  children: React.ReactNode | ((isSticky: boolean) => React.ReactNode);
-  offsetTop: number;
-  containerSelectorFocus: string;
-  zIndex: number;
-  stickyEnableRange: number[];
-  onChange: (isSticky: boolean) => void;
-  forwardedRef: any;
-}
-
-interface StickyState {
-  isEnableSticky: boolean;
-  targetHeight: number;
-  innerPosition: string;
-  containerMeasure: Partial<DOMRect>;
-  isLong: boolean;
-  innerTop: number;
-}
-
-function getWindow(el: Document) {
-  if (!el) {
-    return null;
+const getScrollParent = (node: HTMLElement) => {
+  let parent: HTMLElement | null = node;
+  while ((parent = parent.parentElement)) {
+    const overflowYVal = getComputedStyle(parent, null).getPropertyValue('overflow-y');
+    if (parent === document.body) return window;
+    if (overflowYVal === 'auto' || overflowYVal === 'scroll' || overflowYVal === 'overlay') {
+      return parent;
+    }
   }
+  return window;
+};
 
-  return el.nodeType === 9 && el.defaultView;
+const isOffsetElement = (el: HTMLElement): boolean =>
+  el.firstChild ? (el.firstChild as HTMLElement).offsetParent === el : true;
+
+const offsetTill = (node: HTMLElement, target: HTMLElement) => {
+  let current = node;
+  let offset = 0;
+  // If target is not an offsetParent itself, subtract its offsetTop and set correct target
+  if (!isOffsetElement(target)) {
+    offset += node.offsetTop - target.offsetTop;
+    target = node.offsetParent as HTMLElement;
+    offset += -node.offsetTop;
+  }
+  do {
+    offset += current.offsetTop;
+    current = current.offsetParent as HTMLElement;
+  } while (current && current !== target);
+  return offset;
+};
+
+const getParentNode = (node: HTMLElement) => {
+  let currentParent = node.parentElement;
+  while (currentParent) {
+    const style = getComputedStyle(currentParent, null);
+    if (style.getPropertyValue('display') !== 'contents') break;
+    currentParent = currentParent.parentElement;
+  }
+  return currentParent || window;
+};
+
+let stickyProp: null | string = null;
+if (typeof CSS !== 'undefined' && CSS.supports) {
+  if (CSS.supports('position', 'sticky')) stickyProp = 'sticky';
+  else if (CSS.supports('position', '-webkit-sticky')) stickyProp = '-webkit-sticky';
 }
 
-function offset(el: Element) {
-  if (!el) {
-    return {
+// Inspired by https://github.com/WICG/EventListenerOptions/blob/gh-pages/explainer.md#feature-detection
+let passiveArg: false | { passive: true } = false;
+try {
+  const opts = Object.defineProperty({}, 'passive', {
+    // eslint-disable-next-line getter-return
+    get() {
+      passiveArg = { passive: true };
+    },
+  });
+  const emptyHandler = () => {};
+  window.addEventListener('testPassive', emptyHandler, opts);
+  window.removeEventListener('testPassive', emptyHandler, opts);
+} catch (e) {}
+
+/*
+
+prop overview:
+
+scroll parent
+=============
+- scrollY (onScroll)
+- scrollParentHeight (onResize)
+- scrollParentOffsetTop (onResize)
+
+parent
+======
+- naturalTop (onResize)
+- parentHeight (onResize)
+
+sticky
+======
+- nodeHeight (onResize)
+- offset (onResize)
+
+
+Fns
+===
+reLayout() (also called on init)
+onScroll()
+*/
+
+type UnsubList = (() => void)[];
+type MeasureFn<T extends object> = (opts: {
+  top: number;
+  left: number;
+  height: number;
+  width: number;
+}) => T;
+
+const getDimensions = <T extends object>(opts: {
+  el: HTMLElement | Window;
+  onChange: () => void;
+  unsubs: UnsubList;
+  measure: MeasureFn<T>;
+}): T => {
+  const { el, onChange, unsubs, measure } = opts;
+  if (el === window) {
+    const getRect = () => ({
       top: 0,
       left: 0,
+      height: window.innerHeight,
+      width: window.innerWidth,
+    });
+    const mResult = measure(getRect());
+    const handler = () => {
+      Object.assign(mResult, measure(getRect()));
+      onChange();
     };
-  }
-
-  const doc = el?.ownerDocument;
-  const docElem = doc?.documentElement;
-  const win: any = getWindow(doc);
-  let box = { top: 0, left: 0 };
-
-  if (!doc) {
-    return {
-      top: 0,
-      left: 0,
+    window.addEventListener('resize', handler, passiveArg);
+    unsubs.push(() => window.removeEventListener('resize', handler));
+    return mResult;
+  } else {
+    const mResult = measure((el as HTMLElement).getBoundingClientRect());
+    const handler: any = () => {
+      // note the e[0].contentRect is different from `getBoundingClientRect`
+      Object.assign(mResult, measure((el as HTMLElement).getBoundingClientRect()));
+      onChange();
     };
-  }
-
-  if (typeof el.getBoundingClientRect !== typeof undefined) {
-    box = el.getBoundingClientRect();
-  }
-
-  return {
-    top: box.top + win?.pageYOffset - docElem.clientTop,
-    left: box.left + win?.pageXOffset - docElem.clientLeft,
-  };
-}
-
-type StickyDefaultProps = Pick<
-  StickyProps,
-  'offsetTop' | 'containerSelectorFocus' | 'zIndex' | 'stickyEnableRange' | 'onChange'
->;
-
-const OBJ = 'object';
-const FUNC = 'function';
-
-const classImperativeHandle = (forwardedRef: any, refObj: any) => {
-  if (forwardedRef) {
-    typeof forwardedRef === OBJ && (forwardedRef.current = refObj);
-    typeof forwardedRef === FUNC && forwardedRef(refObj);
+    const ro = new ResizeObserver(handler);
+    ro.observe(el as HTMLElement);
+    unsubs.push(() => ro.disconnect());
+    return mResult;
   }
 };
 
-class StickyClass extends PureComponent<StickyProps, StickyState> {
-  private $container!: any;
-  private $inner!: any;
-  private prevScrollY!: number;
-  private isPrevSticky?: boolean;
+const getVerticalPadding = (node: HTMLElement) => {
+  const computedParentStyle = getComputedStyle(node, null);
+  const parentPaddingTop = parseInt(computedParentStyle.getPropertyValue('padding-top'), 10);
+  const parentPaddingBottom = parseInt(computedParentStyle.getPropertyValue('padding-bottom'), 10);
+  return { top: parentPaddingTop, bottom: parentPaddingBottom };
+};
 
-  public static defaultProps: StickyDefaultProps = {
-    offsetTop: 0,
-    containerSelectorFocus: 'body',
-    zIndex: 10,
-    stickyEnableRange: [0, Number.POSITIVE_INFINITY],
-    onChange: () => {},
-  };
-
-  public state: StickyState = {
-    isEnableSticky: false,
-    targetHeight: Number.POSITIVE_INFINITY,
-    innerPosition: 'static',
-    containerMeasure: {},
-    isLong: false,
-    innerTop: 0,
-  };
-
-  public componentDidMount() {
-    window.addEventListener('scroll', this.handleWindowScroll);
-    this.handleWindowResize();
-    window.addEventListener('resize', this.handleWindowResize);
-
-    classImperativeHandle(this.props.forwardedRef, this);
-  }
-
-  public componentWillUnmount() {
-    window.removeEventListener('scroll', this.handleWindowScroll);
-    window.removeEventListener('resize', this.handleWindowResize);
-  }
-
-  resetState = async () => {
-    window.removeEventListener('scroll', this.handleWindowScroll);
-    window.removeEventListener('resize', this.handleWindowResize);
-
-    await this.setState({
-      isEnableSticky: false,
-      targetHeight: Number.POSITIVE_INFINITY,
-      innerPosition: 'static',
-      containerMeasure: {},
-      isLong: false,
-      innerTop: 0,
-    });
-
-    window.addEventListener('scroll', this.handleWindowScroll);
-    this.handleWindowResize();
-    window.addEventListener('resize', this.handleWindowResize);
-  };
-
-  private getContainerSelectorFocus = () => {
-    const { containerSelectorFocus } = this.props;
-    return this.$container.closest(containerSelectorFocus);
-  };
-
-  private handleWindowResize = () => {
-    const { stickyEnableRange } = this.props;
-    const [min, max] = stickyEnableRange;
-    this.setState({
-      isEnableSticky: window.innerWidth >= min && window.innerWidth <= max,
-    });
-  };
-
-  private handleWindowScroll = async () => {
-    const { onChange } = this.props;
-    const { isEnableSticky } = this.state;
-    const isSticky = this.checkSticky();
-    const $containerSelectorFocus = this.getContainerSelectorFocus();
-    const { innerHeight: windowHeight } = window;
-    if (this.$container && this.$inner && isEnableSticky) {
-      const { clientHeight: innerHeight } = this.$inner;
-      const containerMeasure = this.$container.getBoundingClientRect();
-      const targetHeight = $containerSelectorFocus
-        ? $containerSelectorFocus.clientHeight
-        : Number.POSITIVE_INFINITY;
-      await this.setState({
-        containerMeasure: {
-          top: containerMeasure.top,
-          left: containerMeasure.left,
-          width: containerMeasure.width,
-          height: innerHeight,
-        },
-        targetHeight,
-        isLong: innerHeight > windowHeight,
-      });
-      if (innerHeight > windowHeight) {
-        this.handleLong();
-      } else {
-        this.handleShort();
-      }
-      if (this.isPrevSticky !== isSticky) {
-        onChange(isSticky);
-      }
-      this.isPrevSticky = isSticky;
-    }
-  };
-
-  private checkWrapBottom = () => {
-    const { offsetTop } = this.props;
-    const $containerSelectorFocus = this.getContainerSelectorFocus();
-    const { containerMeasure, isLong } = this.state;
-    const targetHeight = $containerSelectorFocus
-      ? $containerSelectorFocus.clientHeight
-      : Number.POSITIVE_INFINITY;
-    return (
-      (containerMeasure as any)?.top -
-        (containerMeasure as any)?.height +
-        (isLong ? (containerMeasure as any)?.height - window.innerHeight + offsetTop : 0) -
-        offsetTop <
-      targetHeight * -1 - (this.getContainerSelectorFocusOffsetTop() - this.getContainerOffsetTop())
-    );
-  };
-
-  private handleLong = () => {
-    const { scrollY } = window;
-    if (this.prevScrollY > scrollY) {
-      this.handleLongScrollUp(scrollY);
-    } else {
-      this.handleLongScrollDown(scrollY);
-    }
-    this.prevScrollY = scrollY;
-  };
-
-  private getInnerTop = () => {
-    const innerMeasure = this.$inner.getBoundingClientRect();
-    const innerTop = innerMeasure.top || -1;
-    return innerTop;
-  };
-
-  private getInnerOffsetTop = () => {
-    return offset(this.$inner).top;
-  };
-
-  private getContainerOffsetTop = () => {
-    return offset(this.$container).top;
-  };
-
-  private getContainerSelectorFocusOffsetTop = () => {
-    const $containerSelectorFocus = this.getContainerSelectorFocus();
-    return $containerSelectorFocus ? offset($containerSelectorFocus).top : 0;
-  };
-
-  private getContainerSelectorFocusOffsetBottom = () => {
-    const $containerSelectorFocus = this.getContainerSelectorFocus();
-    return $containerSelectorFocus
-      ? Math.trunc(offset($containerSelectorFocus).top + $containerSelectorFocus.clientHeight)
-      : 0;
-  };
-
-  private getInnerPositionTop = () => {
-    if (this.$container && this.$inner) {
-      return this.getInnerOffsetTop() - this.getContainerOffsetTop();
-    }
-    return 0;
-  };
-
-  private handleLongScrollUp = async (scrollY: number) => {
-    const { offsetTop } = this.props;
-    const { containerMeasure, innerPosition } = this.state;
-    const isTop = (containerMeasure as any).top > offsetTop;
-    const innerTop = this.getInnerTop();
-    if (isTop) {
-      this.setState({
-        innerPosition: 'static',
-      });
-    } else {
-      if (
-        (containerMeasure as any).top <= innerTop &&
-        (innerPosition === 'fixedBottom' ||
-          (innerPosition === 'absoluteBottom' &&
-            scrollY + window.innerHeight <= this.getContainerSelectorFocusOffsetBottom()))
-      ) {
-        await this.setState({
-          innerPosition: 'absoluteCenter',
-        });
-      }
-      this.setInnerPositionFixedTop();
-    }
-  };
-
-  private setInnerPositionFixedTop = () => {
-    const { offsetTop } = this.props;
-    const { innerPosition } = this.state;
-    const innerTop = this.getInnerTop();
-    this.setState({
-      innerTop: this.getInnerPositionTop(),
-    });
-    if (innerTop >= offsetTop && innerPosition === 'absoluteCenter') {
-      this.setState({
-        innerPosition: 'fixedTop',
-      });
-    }
-  };
-
-  private handleLongScrollDown = (scrollY: number) => {
-    const { containerMeasure, innerPosition } = this.state;
-    const isBottom =
-      Math.trunc(scrollY + window.innerHeight) >=
-      Math.trunc(this.getInnerOffsetTop() + (containerMeasure as any).height);
-    const isWrapBottom = this.checkWrapBottom();
-    if (innerPosition === 'fixedTop') {
-      this.setState({
-        innerPosition: 'absoluteCenter',
-      });
-    }
-    if (isWrapBottom) {
-      this.setState({
-        innerPosition: 'absoluteBottom',
-      });
-    } else if (isBottom) {
-      this.setState({
-        innerPosition: 'fixedBottom',
-        innerTop: this.getInnerPositionTop(),
-      });
-    }
-  };
-
-  private getShortPosition = (containerMeasure: StickyState['containerMeasure']) => {
-    const { offsetTop } = this.props;
-    if ((containerMeasure as any).top <= offsetTop) {
-      if (this.checkWrapBottom()) {
-        return 'absoluteBottom';
-      }
-      return 'fixedTop';
-    }
-    return 'static';
-  };
-
-  private handleShort = () => {
-    const { containerMeasure } = this.state;
-    this.setState({
-      innerPosition: this.getShortPosition(containerMeasure),
-    });
-  };
-
-  private getInnerStyle = (): CSSProperties => {
-    const { offsetTop, zIndex } = this.props;
-    const { targetHeight, innerPosition, containerMeasure, isLong, innerTop } = this.state;
-    const topForAbsoluteBottom =
-      targetHeight -
-      (containerMeasure as any).height +
-      (this.getContainerSelectorFocusOffsetTop() - this.getContainerOffsetTop());
-    if (isLong) {
-      switch (innerPosition) {
-        case 'static': {
-          return {};
-        }
-        case 'fixedTop': {
-          return {
-            position: 'fixed',
-            top: offsetTop,
-            width: containerMeasure.width,
-            zIndex,
-          };
-        }
-        case 'absoluteCenter': {
-          return {
-            position: 'absolute',
-            top: innerTop,
-            width: containerMeasure.width,
-            zIndex,
-          };
-        }
-        case 'absoluteBottom': {
-          return {
-            position: 'absolute',
-            top: topForAbsoluteBottom,
-            width: containerMeasure.width,
-            zIndex,
-          };
-        }
-        case 'fixedBottom': {
-          return {
-            position: 'fixed',
-            bottom: 0,
-            width: containerMeasure.width,
-            zIndex,
-          };
-        }
-        default: {
-          return {};
-        }
-      }
-    }
-    switch (innerPosition) {
-      case 'static': {
-        return {};
-      }
-      case 'absoluteBottom': {
-        return {
-          position: 'absolute',
-          top: topForAbsoluteBottom,
-          width: containerMeasure.width,
-          zIndex,
-        };
-      }
-      case 'fixedTop': {
-        return {
-          position: 'fixed',
-          top: offsetTop,
-          width: containerMeasure.width,
-          zIndex,
-        };
-      }
-      default: {
-        return {};
-      }
-    }
-  };
-
-  private getContainerStyle = (): CSSProperties => {
-    const { innerPosition, containerMeasure } = this.state;
-    if (innerPosition === 'static') {
-      return {
-        minHeight: containerMeasure.height,
-      };
-    }
-    return {
-      position: 'relative',
-      minHeight: containerMeasure.height,
-    };
-  };
-
-  private checkSticky = () => {
-    const { innerPosition } = this.state;
-    return innerPosition.search(/fixedTop|fixedBottom/g) !== -1;
-  };
-
-  private setContainerRef = (c: any) => {
-    this.$container = c;
-  };
-
-  private setInnerRef = (c: any) => {
-    this.$inner = c;
-  };
-
-  private renderHackGetHeightWhenInnerContentMargin = () => {
-    return <div style={{ fontSize: 0, visibility: 'hidden' }}>.</div>;
-  };
-
-  private renderChildren = () => {
-    const { children } = this.props;
-    const isSticky = this.checkSticky();
-    return typeof children === 'function' ? children(isSticky) : children;
-  };
-
-  public render() {
-    const { isEnableSticky } = this.state;
-    const containerStyle = isEnableSticky ? this.getContainerStyle() : {};
-    const innerStyle = isEnableSticky ? this.getInnerStyle() : {};
-    return (
-      <div ref={this.setContainerRef} style={containerStyle}>
-        <div ref={this.setInnerRef} style={innerStyle}>
-          {this.renderHackGetHeightWhenInnerContentMargin()}
-          {this.renderChildren()}
-          {this.renderHackGetHeightWhenInnerContentMargin()}
-        </div>
-      </div>
-    );
-  }
+const enum MODES {
+  stickyTop,
+  stickyBottom,
+  relative,
+  small,
 }
 
-const Sticky = forwardRef((props: Partial<StickyProps>, ref: any) => {
-  // @ts-ignore
-  return <StickyClass {...props} forwardedRef={ref} />;
-});
+type StickyMode = null | (typeof MODES)[keyof typeof MODES];
+
+const setup = (node: HTMLElement, unsubs: UnsubList, opts: Required<StickyConfig>) => {
+  const { bottom, offsetBottom, offsetTop } = opts;
+  const scrollPane = getScrollParent(node);
+
+  let isScheduled = false;
+  const scheduleOnLayout = () => {
+    if (!isScheduled) {
+      requestAnimationFrame(() => {
+        const nextMode = onLayout();
+        if (nextMode !== mode) changeMode(nextMode);
+        isScheduled = false;
+      });
+    }
+    isScheduled = true;
+  };
+
+  let latestScrollY =
+    scrollPane === window ? window.scrollY : (scrollPane as HTMLElement).scrollTop;
+
+  const isBoxTooLow = (scrollY: number) => {
+    const { offsetTop: scrollPaneOffset, height: viewPortHeight } = scrollPaneDims;
+    const { naturalTop } = parentDims;
+    const { height: nodeHeight } = nodeDims;
+
+    if (
+      scrollY + scrollPaneOffset + viewPortHeight >=
+      naturalTop + nodeHeight + relativeOffset + offsetBottom
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  const onLayout = (): StickyMode => {
+    const { height: viewPortHeight } = scrollPaneDims;
+    const { height: nodeHeight } = nodeDims;
+    if (nodeHeight + offsetTop + offsetBottom <= viewPortHeight) {
+      return MODES.small;
+    } else {
+      if (isBoxTooLow(latestScrollY)) {
+        return MODES.stickyBottom;
+      } else {
+        return MODES.relative;
+      }
+    }
+  };
+
+  const scrollPaneIsOffsetEl = scrollPane !== window && isOffsetElement(scrollPane as HTMLElement);
+  const scrollPaneDims = getDimensions({
+    el: scrollPane,
+    onChange: scheduleOnLayout,
+    unsubs,
+    measure: ({ height, top }) => ({
+      height,
+      offsetTop: scrollPaneIsOffsetEl ? top : 0,
+    }),
+  });
+
+  const parentNode = getParentNode(node);
+  const parentPaddings =
+    parentNode === window ? { top: 0, bottom: 0 } : getVerticalPadding(parentNode as HTMLElement);
+  const parentDims = getDimensions({
+    el: parentNode,
+    onChange: scheduleOnLayout,
+    unsubs,
+    measure: ({ height }) => ({
+      height: height - parentPaddings.top - parentPaddings.bottom,
+      naturalTop:
+        parentNode === window
+          ? 0
+          : offsetTill(parentNode as HTMLElement, scrollPane as HTMLElement) +
+            parentPaddings.top +
+            scrollPaneDims.offsetTop,
+    }),
+  });
+
+  const nodeDims = getDimensions({
+    el: node,
+    onChange: scheduleOnLayout,
+    unsubs,
+    measure: ({ height }) => ({ height }),
+  });
+
+  let relativeOffset = 0;
+  let mode = onLayout();
+
+  const changeMode = (newMode: StickyMode) => {
+    const prevMode = mode;
+    mode = newMode;
+    if (prevMode === MODES.relative) relativeOffset = -1;
+    if (newMode === MODES.small) {
+      node.style.position = stickyProp as string;
+      if (bottom) {
+        node.style.bottom = `${offsetBottom}px`;
+      } else {
+        node.style.top = `${offsetTop}px`;
+      }
+      return;
+    }
+
+    const { height: viewPortHeight, offsetTop: scrollPaneOffset } = scrollPaneDims;
+    const { height: parentHeight, naturalTop } = parentDims;
+    const { height: nodeHeight } = nodeDims;
+    if (newMode === MODES.relative) {
+      node.style.position = 'relative';
+      relativeOffset =
+        prevMode === MODES.stickyTop
+          ? Math.max(0, scrollPaneOffset + latestScrollY - naturalTop + offsetTop)
+          : Math.max(
+              0,
+              scrollPaneOffset +
+                latestScrollY +
+                viewPortHeight -
+                (naturalTop + nodeHeight + offsetBottom),
+            );
+      if (bottom) {
+        const nextBottom = Math.max(0, parentHeight - nodeHeight - relativeOffset);
+        node.style.bottom = `${nextBottom}px`;
+      } else {
+        node.style.top = `${relativeOffset}px`;
+      }
+    } else {
+      node.style.position = stickyProp as string;
+      if (newMode === MODES.stickyBottom) {
+        if (bottom) {
+          node.style.bottom = `${offsetBottom}px`;
+        } else {
+          node.style.top = `${viewPortHeight - nodeHeight - offsetBottom}px`;
+        }
+      } else {
+        // stickyTop
+        if (bottom) {
+          node.style.bottom = `${viewPortHeight - nodeHeight - offsetBottom}px`;
+        } else {
+          node.style.top = `${offsetTop}px`;
+        }
+      }
+    }
+  };
+  changeMode(mode);
+
+  const onScroll = (scrollY: number) => {
+    if (scrollY === latestScrollY) return;
+    const scrollDelta = scrollY - latestScrollY;
+    latestScrollY = scrollY;
+    if (mode === MODES.small) return;
+
+    const { offsetTop: scrollPaneOffset, height: viewPortHeight } = scrollPaneDims;
+    const { naturalTop, height: parentHeight } = parentDims;
+    const { height: nodeHeight } = nodeDims;
+
+    if (scrollDelta > 0) {
+      // scroll down
+      if (mode === MODES.stickyTop) {
+        if (scrollY + scrollPaneOffset + offsetTop > naturalTop) {
+          const topOffset = Math.max(0, scrollPaneOffset + latestScrollY - naturalTop + offsetTop);
+          if (
+            scrollY + scrollPaneOffset + viewPortHeight <=
+            naturalTop + nodeHeight + topOffset + offsetBottom
+          ) {
+            changeMode(MODES.relative);
+          } else {
+            changeMode(MODES.stickyBottom);
+          }
+        }
+      } else if (mode === MODES.relative) {
+        if (isBoxTooLow(scrollY)) changeMode(MODES.stickyBottom);
+      }
+    } else {
+      // scroll up
+      if (mode === MODES.stickyBottom) {
+        if (
+          scrollPaneOffset + scrollY + viewPortHeight <
+          naturalTop + parentHeight + offsetBottom
+        ) {
+          const bottomOffset = Math.max(
+            0,
+            scrollPaneOffset +
+              latestScrollY +
+              viewPortHeight -
+              (naturalTop + nodeHeight + offsetBottom),
+          );
+          if (scrollPaneOffset + scrollY + offsetTop >= naturalTop + bottomOffset) {
+            changeMode(MODES.relative);
+          } else {
+            changeMode(MODES.stickyTop);
+          }
+        }
+      } else if (mode === MODES.relative) {
+        if (scrollPaneOffset + scrollY + offsetTop < naturalTop + relativeOffset) {
+          changeMode(MODES.stickyTop);
+        }
+      }
+    }
+  };
+
+  const handleScroll =
+    scrollPane === window
+      ? () => onScroll(window.scrollY)
+      : () => onScroll((scrollPane as HTMLElement).scrollTop);
+
+  scrollPane.addEventListener('scroll', handleScroll, passiveArg);
+  scrollPane.addEventListener('mousewheel', handleScroll, passiveArg);
+  unsubs.push(
+    () => scrollPane.removeEventListener('scroll', handleScroll),
+    () => scrollPane.removeEventListener('mousewheel', handleScroll),
+  );
+};
+
+export type StickyConfig = {
+  offsetTop?: number;
+  offsetBottom?: number;
+  bottom?: boolean;
+};
+
+export type UseStickyOptions = StickyConfig;
+
+export const useSticky = ({
+  offsetTop = 0,
+  offsetBottom = 0,
+  bottom = false,
+}: StickyConfig = {}) => {
+  const [node, setNode] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!node || !stickyProp) return;
+    const unsubs: UnsubList = [];
+    setup(node, unsubs, { offsetBottom, offsetTop, bottom });
+    return () => {
+      unsubs.forEach((fn) => fn());
+    };
+  }, [node, offsetBottom, offsetTop, bottom]);
+
+  return setNode;
+};
+
+export type StickyCompProps = StickyConfig &
+  Pick<ComponentProps<'div'>, 'children' | 'className' | 'style'>;
+
+const Sticky = (props: StickyCompProps) => {
+  const { offsetTop, offsetBottom, bottom, children, className, style } = props;
+  const ref = useSticky({ offsetTop, offsetBottom, bottom });
+
+  return (
+    <div className={className} style={style} ref={ref}>
+      {children}
+    </div>
+  );
+};
 
 export default Sticky;

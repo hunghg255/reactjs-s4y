@@ -13,4 +13,4 @@ type StickyProps = UseStickyOptions & {
 declare const useStickyBox: <T = any>(options?: UseStickyOptions) => React.RefCallback<T>;
 declare const Sticky: React.FunctionComponent<StickyProps>;
 
-export { StickyProps, UseStickyOptions, Sticky as default, useStickyBox };
+export { Sticky as default, useStickyBox, StickyProps, UseStickyOptions };
