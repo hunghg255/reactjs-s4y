@@ -14,54 +14,32 @@ npm install --save reactjs-s4y
 ```
 
 #### Basic usage:
-
 ```jsx
-import React, { Component } from 'react';
-import Sticky from 'reactjs-s4y';
+import Sticky from "reactjs-s4y";
 
-export default const App {
-
-  return <Sticky
-          containerSelectorFocus=".App"
-          stickyEnableRange={[768, Infinity]}
-        >
-      <img
-        src="https://images.unsplash.com/photo-1673169128434-90faeb36aaa3?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=2370&q=80"
-        alt=""
-    />
-  </Sticky>;
-}
+const Page = () => (
+  <div className="row">
+    <Sticky offsetTop={20} offsetBottom={20}>
+      <div>Sidebar</div>
+    </Sticky>
+    <div>Content</div>
+  </div>
+);
 ```
 
-
-#### Nextjs
-- Need to reset state and event when change page
+### Or via the `useSticky` hook
 
 ```jsx
-import React, { Component } from 'react';
-import Sticky from 'reactjs-s4y';
-import { Router } from 'next/router';
+import {useSticky} from "reactjs-s4y";
 
-export default const App {
-  const refSticky = useRef();
-
-  useEffect(() => {
-    Router.events.on('routeChangeStart', () => {
-      if (refSticky.current?.resetState) {
-        refSticky.current.resetState();
-      }
-    });
-  }, []);
-
-  return <Sticky
-          containerSelectorFocus=".App"
-          stickyEnableRange={[768, Infinity]}
-          ref={refSticky}
-        >
-      <img
-        src="https://images.unsplash.com/photo-1673169128434-90faeb36aaa3?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=2370&q=80"
-        alt=""
-    />
-  </Sticky>;
-}
+const Page = () => {
+  const stickyRef = useSticky({offsetTop: 20, offsetBottom: 20})
+  <div className="row">
+    <aside ref={stickyRef}>
+      <div>Sidebar</div>
+    </aside>
+    <div>Content</div>
+  </div>
+};
 ```
+---
